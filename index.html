@@ -1,0 +1,848 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>html{color-scheme:dark;background:#000}body{margin:0}</style>
+</head>
+<body>
+<title>Mapa sonoro</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600&family=Noto+Color+Emoji&display=swap">
+<style>
+/* Layout: mapa-múndi em tela cheia, contornos brancos finos sobre preto; painel de leitura (nome, bandeira, rota do som) no canto inferior esquerdo, sobre o Pacífico vazio. */
+:root {
+  --bg: #000000;
+  --ink: #f4f4f2;
+  --dim: #8d8f93;
+  --line: rgba(255, 255, 255, 0.82);
+  --hair: rgba(255, 255, 255, 0.16);
+  --pen: #ffffff;
+  --display: "Space Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--display); overflow: hidden; }
+#app { position: relative; width: 100%; height: 100%; overflow: hidden; background: var(--bg); }
+canvas.layer { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+#over { cursor: crosshair; }
+
+.top { position: absolute; top: 14px; left: max(16px, env(safe-area-inset-left, 0px)); right: 140px; pointer-events: none; }
+.top h1 { margin: 0; font-size: 13px; font-weight: 500; letter-spacing: .16em; text-transform: uppercase; }
+.top p { margin: 4px 0 0; font: 400 11px/1.4 var(--mono); color: var(--dim); }
+
+.controls { position: absolute; top: 10px; right: max(16px, env(safe-area-inset-right, 0px)); display: flex; gap: 6px; }
+.controls button {
+  font: 500 11px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase;
+  color: var(--ink); background: #000; border: 1px solid var(--hair); border-radius: 2px;
+  min-width: 34px; height: 30px; padding: 0 10px; cursor: pointer;
+}
+.controls button:hover { border-color: var(--line); }
+.controls button:focus-visible, #gate button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.controls button[aria-pressed="false"] { color: var(--dim); }
+
+#hud {
+  position: absolute; left: max(16px, env(safe-area-inset-left, 0px)); bottom: max(14px, env(safe-area-inset-bottom, 0px));
+  width: 268px; display: grid; gap: 8px; pointer-events: none;
+  background: rgba(0,0,0,.82); padding: 10px; border: 1px solid var(--hair);
+}
+#hud .name { font-size: 26px; font-weight: 600; line-height: 1.1; min-height: 29px; text-wrap: balance; }
+#hud .meta { display: flex; justify-content: space-between; font: 400 10px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--dim); }
+#hud .meta b { font-weight: 500; color: var(--ink); }
+#flagCv { width: 100%; aspect-ratio: 3 / 2; display: block; background: #050505; border: 1px solid var(--hair); }
+#traceCv { width: 100%; height: 54px; display: block; }
+#hud.idle .name { color: var(--dim); }
+.rows { display: grid; gap: 8px; }
+
+#tip {
+  position: absolute; left: 0; top: 0; pointer-events: none; opacity: 0; transform: translate(-9999px, -9999px);
+  background: #000; border: 1px solid var(--line); padding: 4px 8px; font: 500 12px/1.2 var(--display); white-space: nowrap;
+}
+.credit { position: absolute; right: max(16px, env(safe-area-inset-right, 0px)); bottom: max(10px, env(safe-area-inset-bottom, 0px)); font: 400 9.5px/1.3 var(--mono); color: #5d5f63; text-align: right; pointer-events: none; }
+
+#gate {
+  position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,.9); z-index: 5;
+  padding: 24px max(16px, env(safe-area-inset-left, 0px));
+}
+#gate .box { max-width: 460px; display: grid; gap: 16px; }
+#gate h2 { margin: 0; font-size: clamp(28px, 6vw, 44px); font-weight: 600; line-height: 1.05; letter-spacing: -.01em; text-wrap: balance; }
+#gate p { margin: 0; color: #b9bbbf; font-size: 15px; line-height: 1.5; }
+#gate .row { display: flex; gap: 10px; flex-wrap: wrap; }
+#gate button { font: 500 12px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; padding: 13px 18px; border-radius: 2px; cursor: pointer; border: 1px solid var(--line); background: #fff; color: #000; }
+#gate button.ghost { background: transparent; color: var(--ink); border-color: var(--hair); }
+#gate button:disabled { opacity: .4; cursor: default; }
+#status { font: 400 12px/1.4 var(--mono); color: var(--dim); min-height: 17px; }
+#status.err { color: #ff8a80; }
+
+@media (max-width: 640px) {
+  .top p { display: none; }
+  .top { right: 16px; }
+  .controls { top: auto; bottom: auto; position: absolute; top: 34px; right: max(16px, env(safe-area-inset-right, 0px)); }
+  #hud { width: auto; right: max(16px, env(safe-area-inset-right, 0px)); grid-template-columns: 104px 1fr; align-items: end; column-gap: 10px; }
+  #hud .name { font-size: 20px; min-height: 0; }
+  #hud .rows { grid-column: 2; grid-row: 1; }
+  #hud #flagCv { grid-column: 1; grid-row: 1; }
+  #hud .tracewrap { grid-column: 1 / -1; }
+  #traceCv { height: 40px; }
+  .credit { display: none; }
+}
+@media (max-height: 560px) and (min-width: 641px) { #traceCv, .tracewrap { display: none; } #hud { width: 220px; } #hud .name { font-size: 20px; } }
+@media (prefers-reduced-motion: reduce) { #tip { transition: none; } }
+</style>
+
+<div id="app">
+  <canvas id="base" class="layer"></canvas>
+  <canvas id="over" class="layer" aria-label="Mapa-múndi interativo"></canvas>
+
+  <header class="top">
+    <h1>Mapa sonoro</h1>
+    <p>Passe o mouse sobre um país. Role para ampliar, arraste para mover.</p>
+  </header>
+
+  <div class="controls">
+    <button id="bSound" aria-pressed="true" aria-label="Ligar ou desligar o som">Som</button>
+    <button id="bIn" aria-label="Ampliar">+</button>
+    <button id="bOut" aria-label="Reduzir">−</button>
+    <button id="bReset" aria-label="Enquadrar o mundo">Mundo</button>
+  </div>
+
+  <aside id="hud" class="idle" aria-live="polite">
+    <div class="rows">
+      <div class="name" id="hName">Escolha um país</div>
+      <div class="meta"><span id="hCode">—</span><b id="hState">&nbsp;</b></div>
+    </div>
+    <canvas id="flagCv"></canvas>
+    <div class="tracewrap">
+      <div class="meta"><span>Rota do som</span><b id="hHz">180–1400 Hz</b></div>
+      <canvas id="traceCv"></canvas>
+    </div>
+  </aside>
+
+  <div id="tip"></div>
+  <div class="credit">Mapa: Highcharts Map Collection, Natural Earth<br>Bandeiras: flag-icons, country-flag-icons</div>
+
+  <div id="gate">
+    <div class="box">
+      <h2>Cada país desenha a própria bandeira.</h2>
+      <p>Ao passar o mouse sobre um território, a bandeira é traçada dentro das suas fronteiras. A altura da caneta define o tom: quanto mais alto o traço, mais agudo o som.</p>
+      <div class="row">
+        <button id="gSound" disabled>Entrar com som</button>
+        <button id="gMute" class="ghost" disabled>Sem som</button>
+      </div>
+      <div id="status">Carregando o mapa…</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ---------- Fontes de dados (somente scripts de CDN são permitidos) ---------- */
+  var MAP_BASE = 'https://cdn.jsdelivr.net/npm/@highcharts/map-collection@2.3.3/custom/';
+  var MAP_FILES = ['world-palestine-taiwan-highres', 'world-taiwan-highres', 'world-highres', 'world'];
+  var FLAG_BASE = 'https://cdn.jsdelivr.net/npm/country-flag-icons@1.6.16/string/3x2/';
+
+  var $ = function (id) { return document.getElementById(id); };
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+  var baseCv = $('base'), overCv = $('over'), bctx = baseCv.getContext('2d'), octx = overCv.getContext('2d');
+  var hitCv = document.createElement('canvas'), hitCtx = hitCv.getContext('2d', { willReadFrequently: true });
+  var flagCv = $('flagCv'), fctx = flagCv.getContext('2d'), traceCv = $('traceCv'), tctx = traceCv.getContext('2d');
+  var tip = $('tip'), statusEl = $('status');
+  var VW = 0, VH = 0;
+
+  var countries = [], others = [], allPath = null, worldW = 1000, worldH = 500;
+  var view = { k: 1, tx: 0, ty: 0 }, fitK = 1;
+  var viewDirty = true, hitDirty = true, overDirty = true;
+  var ptNames = null;
+  try { ptNames = new Intl.DisplayNames(['pt-BR'], { type: 'region' }); } catch (e) {}
+
+  /* ---------- Carregamento do mapa ---------- */
+  function loadScript(src) {
+    return new Promise(function (res, rej) {
+      var s = document.createElement('script');
+      s.src = src; s.async = true;
+      s.onload = res; s.onerror = function () { rej(new Error('falha: ' + src)); };
+      document.head.appendChild(s);
+    });
+  }
+  window.Highcharts = window.Highcharts || { maps: {} };
+  if (!window.Highcharts.maps) window.Highcharts.maps = {};
+
+  async function loadMapData() {
+    for (var i = 0; i < MAP_FILES.length; i++) {
+      var before = Object.keys(window.Highcharts.maps).length;
+      try {
+        await loadScript(MAP_BASE + MAP_FILES[i] + '.js');
+        var keys = Object.keys(window.Highcharts.maps);
+        if (keys.length > before || keys.length) {
+          var m = window.Highcharts.maps[keys[keys.length - 1]];
+          if (m) return m;
+        }
+      } catch (e) { console.warn(e.message); }
+    }
+    throw new Error('Nenhum arquivo de mapa carregou');
+  }
+
+  function toFeatures(m) {
+    if (m.type === 'FeatureCollection') return m.features.map(function (f) { return { props: f.properties || {}, geom: f.geometry }; });
+    if (m.type === 'Topology') {
+      var tr = m.transform;
+      var arcs = m.arcs.map(function (a) {
+        var x = 0, y = 0;
+        return a.map(function (p) {
+          if (tr) { x += p[0]; y += p[1]; return [x * tr.scale[0] + tr.translate[0], y * tr.scale[1] + tr.translate[1]]; }
+          return [p[0], p[1]];
+        });
+      });
+      var arcPts = function (i) { return i < 0 ? arcs[~i].slice().reverse() : arcs[i]; };
+      var ring = function (idxs) {
+        var out = [];
+        idxs.forEach(function (ai, j) { var pts = arcPts(ai); for (var q = j ? 1 : 0; q < pts.length; q++) out.push(pts[q]); });
+        return out;
+      };
+      var keys = Object.keys(m.objects), key = m.objects['default'] ? 'default' : keys[0];
+      var obj = m.objects[key], geoms = obj.geometries || [obj];
+      return geoms.filter(function (g) { return g && g.type; }).map(function (g) {
+        var coords = null;
+        if (g.type === 'Polygon') coords = g.arcs.map(ring);
+        else if (g.type === 'MultiPolygon') coords = g.arcs.map(function (poly) { return poly.map(ring); });
+        return { props: g.properties || {}, geom: coords ? { type: g.type, coordinates: coords } : null };
+      });
+    }
+    throw new Error('Formato de mapa desconhecido');
+  }
+
+  function codeOf(p) {
+    var c = p['iso-a2'] || p['hc-a2'] || (p['hc-key'] && String(p['hc-key']).length === 2 ? p['hc-key'] : '');
+    c = String(c || '').toUpperCase();
+    return /^[A-Z]{2}$/.test(c) ? c : '';
+  }
+  function polysOf(g) {
+    if (!g) return [];
+    if (g.type === 'Polygon') return [g.coordinates];
+    if (g.type === 'MultiPolygon') return g.coordinates;
+    return [];
+  }
+
+  function naturalEarth(lon, lat) {
+    var l = lon * Math.PI / 180, p = lat * Math.PI / 180, p2 = p * p, p4 = p2 * p2;
+    var x = l * (0.8707 - 0.131979 * p2 + p4 * (-0.013791 + p4 * (0.003971 * p2 - 0.001529 * p4)));
+    var y = p * (1.007226 + p2 * (0.015085 + p4 * (-0.044475 + 0.028874 * p2 - 0.005916 * p4)));
+    return [x, -y];
+  }
+
+  function buildWorld(raw) {
+    var feats = toFeatures(raw);
+    var maxx = 0, maxy = 0;
+    feats.forEach(function (f) {
+      polysOf(f.geom).forEach(function (poly) { poly.forEach(function (r) { for (var i = 0; i < r.length; i++) {
+        var ax = Math.abs(r[i][0]), ay = Math.abs(r[i][1]); if (ax > maxx) maxx = ax; if (ay > maxy) maxy = ay; } }); });
+    });
+    var lonlat = maxx <= 181 && maxy <= 91;
+    var flip = false;
+    if (!lonlat) {
+      var cy = function (codes) {
+        var s = 0, n = 0;
+        feats.forEach(function (f) {
+          if (codes.indexOf(codeOf(f.props)) < 0) return;
+          polysOf(f.geom).forEach(function (poly) { poly[0].forEach(function (pt) { s += pt[1]; n++; }); });
+        });
+        return n ? s / n : null;
+      };
+      var north = cy(['RU', 'CA', 'GL']), south = cy(['AQ', 'AU', 'NZ', 'AR']);
+      if (north !== null && south !== null && north > south) flip = true;
+    }
+    var proj = lonlat ? function (p) { return naturalEarth(p[0], p[1]); } : function (p) { return [p[0], flip ? -p[1] : p[1]]; };
+
+    var minX = 1e18, minY = 1e18, maxX = -1e18, maxY = -1e18;
+    var items = feats.map(function (f) {
+      var polys = polysOf(f.geom).map(function (poly) {
+        return poly.map(function (r) {
+          var a = new Float64Array(r.length * 2);
+          for (var i = 0; i < r.length; i++) {
+            var q = proj(r[i]); a[2 * i] = q[0]; a[2 * i + 1] = q[1];
+            if (q[0] < minX) minX = q[0]; if (q[0] > maxX) maxX = q[0];
+            if (q[1] < minY) minY = q[1]; if (q[1] > maxY) maxY = q[1];
+          }
+          return a;
+        });
+      });
+      return { props: f.props, polys: polys };
+    });
+    var sc = 1000 / (maxX - minX);
+    worldW = 1000; worldH = (maxY - minY) * sc;
+    items.forEach(function (it) { it.polys.forEach(function (poly) { poly.forEach(function (a) {
+      for (var i = 0; i < a.length; i += 2) { a[i] = (a[i] - minX) * sc; a[i + 1] = (a[i + 1] - minY) * sc; } }); }); });
+
+    var byCode = new Map();
+    others = [];
+    items.forEach(function (it) {
+      var code = codeOf(it.props);
+      if (!code || !it.polys.length) { if (it.polys.length) others.push(it); return; }
+      var c = byCode.get(code);
+      if (!c) { c = { code: code, name: it.props.name || code, polys: [] }; byCode.set(code, c); }
+      it.polys.forEach(function (p) { c.polys.push(p); });
+    });
+    countries = Array.from(byCode.values());
+    allPath = new Path2D();
+    countries.forEach(prepCountry);
+    others.forEach(function (it) { var p = new Path2D(); it.polys.forEach(function (poly) { addRings(p, poly); }); allPath.addPath(p); });
+    countries.sort(function (a, b) { return b.area - a.area; });
+    countries.forEach(function (c, i) { c.id = i; c.label = labelOf(c); });
+  }
+
+  function addRings(path, rings) {
+    rings.forEach(function (a) {
+      if (a.length < 6) return;
+      path.moveTo(a[0], a[1]);
+      for (var i = 2; i < a.length; i += 2) path.lineTo(a[i], a[i + 1]);
+      path.closePath();
+    });
+  }
+  function ringArea(a) { var s = 0; for (var i = 0, n = a.length / 2; i < n; i++) { var j = (i + 1) % n; s += a[2 * i] * a[2 * j + 1] - a[2 * j] * a[2 * i + 1]; } return Math.abs(s) / 2; }
+  function ringBox(a) { var x0 = 1e18, y0 = 1e18, x1 = -1e18, y1 = -1e18; for (var i = 0; i < a.length; i += 2) { if (a[i] < x0) x0 = a[i]; if (a[i] > x1) x1 = a[i]; if (a[i + 1] < y0) y0 = a[i + 1]; if (a[i + 1] > y1) y1 = a[i + 1]; } return { x0: x0, y0: y0, x1: x1, y1: y1 }; }
+
+  function prepCountry(c) {
+    var path = new Path2D(), polyInfo = [];
+    c.polys.forEach(function (poly) {
+      addRings(path, poly);
+      var b = ringBox(poly[0]); b.area = ringArea(poly[0]); b.poly = poly; polyInfo.push(b);
+    });
+    c.path = path; allPath.addPath(path);
+    polyInfo.sort(function (a, b) { return b.area - a.area; });
+    var groups = [];
+    polyInfo.forEach(function (p) {
+      for (var gi = 0; gi < groups.length; gi++) {
+        var g = groups[gi];
+        var dx = Math.max(g.x0 - p.x1, p.x0 - g.x1, 0), dy = Math.max(g.y0 - p.y1, p.y0 - g.y1, 0);
+        var thr = 0.35 * Math.max(g.x1 - g.x0, g.y1 - g.y0, 6);
+        if (Math.hypot(dx, dy) <= thr) {
+          g.polys.push(p.poly); g.area += p.area;
+          g.x0 = Math.min(g.x0, p.x0); g.y0 = Math.min(g.y0, p.y0); g.x1 = Math.max(g.x1, p.x1); g.y1 = Math.max(g.y1, p.y1);
+          return;
+        }
+      }
+      groups.push({ polys: [p.poly], area: p.area, x0: p.x0, y0: p.y0, x1: p.x1, y1: p.y1 });
+    });
+    groups.forEach(function (g) {
+      g.path = new Path2D(); g.polys.forEach(function (poly) { addRings(g.path, poly); });
+      fitGroup(g, 1.5);
+    });
+    c.groups = groups; c.main = groups[0]; c.area = groups.reduce(function (s, g) { return s + g.area; }, 0);
+  }
+
+  /* Encaixa a bandeira na caixa do território: mostra tudo se a distorção couber em 1,6x, senão corta o excesso. */
+  function fitGroup(g, ar) {
+    var W = Math.max(g.x1 - g.x0, 0.01), H = Math.max(g.y1 - g.y0, 0.01), cx = (g.x0 + g.x1) / 2, cy = (g.y0 + g.y1) / 2;
+    var cap = 1.6, fw, fh;
+    if ((W / H) / ar >= 1) { fw = W; fh = Math.max(H, W / ar / cap); } else { fh = H; fw = Math.max(W, H * ar / cap); }
+    g.fx = cx - fw / 2; g.fy = cy - fh / 2; g.fw = fw; g.fh = fh;
+  }
+
+  function labelOf(c) {
+    var n = '';
+    try { n = ptNames ? ptNames.of(c.code) : ''; } catch (e) {}
+    if (!n || n === c.code) n = c.name;
+    return n;
+  }
+
+  /* ---------- Bandeiras: SVG (country-flag-icons), com fallback para emoji ---------- */
+  /* Fonte detalhada (brasões completos, 4:3). Usa fetch, então só funciona onde a rede permite; senão cai para country-flag-icons (3:2). */
+  var DETAIL_BASE = 'https://cdn.jsdelivr.net/npm/flag-icons@7.2.3/flags/4x3/';
+  var DW = 800, DH = 600, FW = 720, FH = 480;
+  var detailOk = true, detailCache = new Map();
+  function getDetailSvg(code) {
+    if (!detailOk) return Promise.resolve(null);
+    if (!detailCache.has(code)) {
+      detailCache.set(code, (async function () {
+        try {
+          var r = await fetch(DETAIL_BASE + code.toLowerCase() + '.svg');
+          if (!r.ok) return null;
+          var t = await r.text();
+          return t.indexOf('<svg') >= 0 ? t : null;
+        } catch (e) { detailOk = false; return null; }
+      })());
+    }
+    return detailCache.get(code);
+  }
+  function prefetchDetail() {
+    var q = countries.map(function (c) { return c.code; }), n = 0;
+    function next() { if (!detailOk || n >= q.length) return; getDetailSvg(q[n++]).then(next); }
+    for (var i = 0; i < 4; i++) setTimeout(next, 600 + i * 150);
+  }
+  var flagIndexP = null, flagCache = new Map();
+  function loadFlagIndex() {
+    if (!flagIndexP) {
+      flagIndexP = Promise.race([
+        import(FLAG_BASE + 'index.js'),
+        new Promise(function (_, rej) { setTimeout(function () { rej(new Error('timeout')); }, 15000); })
+      ]).catch(function (e) { console.warn('flags index:', e.message || e); return null; });
+    }
+    return flagIndexP;
+  }
+  async function getSvg(code) {
+    var m = await loadFlagIndex();
+    if (m) {
+      if (typeof m[code] === 'string') return m[code];
+      if (m.default && typeof m.default[code] === 'string') return m.default[code];
+    }
+    try { var mm = await import(FLAG_BASE + code + '.js'); if (typeof mm.default === 'string') return mm.default; } catch (e) {}
+    return null;
+  }
+  function fixSvg(svg, w, h) {
+    return svg.replace(/<svg\b([^>]*)>/i, function (m, attrs) {
+      attrs = attrs.replace(/\s(width|height|preserveAspectRatio)="[^"]*"/gi, '');
+      if (!/xmlns=/.test(attrs)) attrs += ' xmlns="http://www.w3.org/2000/svg"';
+      return '<svg' + attrs + ' width="' + w + '" height="' + h + '" preserveAspectRatio="none">';
+    });
+  }
+  function loadImage(src) {
+    return new Promise(function (res, rej) { var im = new Image(); im.onload = function () { res(im); }; im.onerror = rej; im.src = src; });
+  }
+  async function emojiFlag(code) {
+    try {
+      var ch = Array.from(code.toUpperCase()).map(function (c) { return String.fromCodePoint(127397 + c.charCodeAt(0)); }).join('');
+      await document.fonts.load('240px "Noto Color Emoji"', ch);
+      var S = 720, h = 420, c = document.createElement('canvas'); c.width = S; c.height = h;
+      var x = c.getContext('2d', { willReadFrequently: true });
+      x.font = '240px "Noto Color Emoji", sans-serif'; x.textBaseline = 'alphabetic'; x.fillText(ch, 20, 300);
+      var d = x.getImageData(0, 0, S, h).data, x0 = S, y0 = h, x1 = -1, y1 = -1;
+      for (var yy = 0; yy < h; yy++) for (var xx = 0; xx < S; xx++) if (d[(yy * S + xx) * 4 + 3] > 40) { if (xx < x0) x0 = xx; if (xx > x1) x1 = xx; if (yy < y0) y0 = yy; if (yy > y1) y1 = yy; }
+      if (x1 - x0 < 20) return null;
+      var o = document.createElement('canvas'); o.width = FW; o.height = FH;
+      o.getContext('2d').drawImage(c, x0, y0, x1 - x0 + 1, y1 - y0 + 1, 0, 0, FW, FH);
+      return o;
+    } catch (e) { return null; }
+  }
+  function getFlag(code) {
+    if (!flagCache.has(code)) flagCache.set(code, buildFlag(code).catch(function (e) { console.warn('bandeira', code, e); return null; }));
+    return flagCache.get(code);
+  }
+  async function buildFlag(code) {
+    var svg = await getDetailSvg(code), W = DW, H = DH, vec, cv = document.createElement('canvas');
+    if (!svg) { svg = await getSvg(code); W = FW; H = FH; }
+    cv.width = W; cv.height = H;
+    var cx = cv.getContext('2d', { willReadFrequently: true });
+    if (svg) {
+      vec = await loadImage('data:image/svg+xml;charset=utf-8,' + encodeURIComponent(fixSvg(svg, W * 2, H * 2)));
+      cx.drawImage(vec, 0, 0, W, H);
+    } else {
+      var em = await emojiFlag(code); if (!em) return null;
+      cx.drawImage(em, 0, 0, W, H); vec = em;
+    }
+    var fl = analyze(cx.getImageData(0, 0, W, H));
+    fl.vec = vec;
+    return fl;
+  }
+
+  /* Divide a bandeira em regiões de cor, define a ordem do traço e o tempo de cada pixel. */
+  function analyze(id) {
+    var W = id.width, H = id.height, N = W * H, d = id.data, i, o;
+    var hist = new Uint32Array(4096), sr = new Float64Array(4096), sg = new Float64Array(4096), sb = new Float64Array(4096), opaque = 0;
+    for (i = 0; i < N; i++) {
+      o = i * 4; if (d[o + 3] < 128) continue; opaque++;
+      var k = ((d[o] >> 4) << 8) | ((d[o + 1] >> 4) << 4) | (d[o + 2] >> 4);
+      hist[k]++; sr[k] += d[o]; sg[k] += d[o + 1]; sb[k] += d[o + 2];
+    }
+    var keys = []; for (i = 0; i < 4096; i++) if (hist[i]) keys.push(i);
+    keys.sort(function (a, b) { return hist[b] - hist[a]; });
+    var pal = [];
+    for (i = 0; i < keys.length; i++) {
+      var kk = keys[i]; if (hist[kk] < opaque * 0.0012 || pal.length >= 14) break;
+      var c = [sr[kk] / hist[kk], sg[kk] / hist[kk], sb[kk] / hist[kk]];
+      if (pal.every(function (p) { return (p[0] - c[0]) * (p[0] - c[0]) + (p[1] - c[1]) * (p[1] - c[1]) + (p[2] - c[2]) * (p[2] - c[2]) > 1600; })) pal.push(c);
+    }
+    if (!pal.length) pal.push([255, 255, 255]);
+    var idx = new Uint8Array(N);
+    for (i = 0; i < N; i++) {
+      o = i * 4; if (d[o + 3] < 128) { idx[i] = 255; continue; }
+      var best = 0, bd = 1e9;
+      for (var p = 0; p < pal.length; p++) { var dd = (pal[p][0] - d[o]) * (pal[p][0] - d[o]) + (pal[p][1] - d[o + 1]) * (pal[p][1] - d[o + 1]) + (pal[p][2] - d[o + 2]) * (pal[p][2] - d[o + 2]); if (dd < bd) { bd = dd; best = p; } }
+      idx[i] = best;
+    }
+    var lab = new Int32Array(N).fill(-1), stack = new Int32Array(N), regs = [];
+    for (var s = 0; s < N; s++) {
+      if (idx[s] === 255 || lab[s] >= 0) continue;
+      var rid = regs.length, R = { pal: idx[s], area: 0, x0: W, x1: -1, y0: H, y1: -1, first: s }, sp = 0;
+      stack[sp++] = s; lab[s] = rid;
+      while (sp) {
+        var q = stack[--sp], x = q % W, y = (q / W) | 0; R.area++;
+        if (x < R.x0) R.x0 = x; if (x > R.x1) R.x1 = x; if (y < R.y0) R.y0 = y; if (y > R.y1) R.y1 = y;
+        if (x > 0 && lab[q - 1] < 0 && idx[q - 1] === R.pal) { lab[q - 1] = rid; stack[sp++] = q - 1; }
+        if (x < W - 1 && lab[q + 1] < 0 && idx[q + 1] === R.pal) { lab[q + 1] = rid; stack[sp++] = q + 1; }
+        if (y > 0 && lab[q - W] < 0 && idx[q - W] === R.pal) { lab[q - W] = rid; stack[sp++] = q - W; }
+        if (y < H - 1 && lab[q + W] < 0 && idx[q + W] === R.pal) { lab[q + W] = rid; stack[sp++] = q + W; }
+      }
+      regs.push(R);
+    }
+    var order = regs.map(function (_, j) { return j; }).sort(function (a, b) { return regs[b].area - regs[a].area; });
+    var unit = Math.max(1, opaque * 0.02), majors = [];
+    order.forEach(function (j) { if (regs[j].area >= opaque * 0.004 && majors.length < 36) majors.push(j); });
+    if (!majors.length && order.length) majors.push(order[0]);
+    majors.sort(function (a, b) { var ba = Math.round(regs[a].area / unit), bb = Math.round(regs[b].area / unit); return bb - ba || regs[a].x0 - regs[b].x0; });
+    var grp = new Int16Array(regs.length).fill(-2), lumpIdx = majors.length;
+    majors.forEach(function (j, gi) { grp[j] = gi; });
+    var hasLump = false;
+    regs.forEach(function (R, j) {
+      if (grp[j] !== -2) return;
+      var thin = Math.min(R.x1 - R.x0, R.y1 - R.y0) <= 2, merged = false;
+      if (thin) {
+        var fx = R.first % W, fy = (R.first / W) | 0;
+        for (var rr = 1; rr <= 4 && !merged; rr++) for (var oy = -rr; oy <= rr && !merged; oy++) for (var ox = -rr; ox <= rr; ox++) {
+          var nx = fx + ox, ny = fy + oy; if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+          var nl = lab[ny * W + nx]; if (nl >= 0 && grp[nl] >= 0) { grp[j] = grp[nl]; merged = true; break; }
+        }
+      }
+      if (!merged) { grp[j] = lumpIdx; hasLump = true; }
+    });
+    var G = majors.length + (hasLump ? 1 : 0), rids = new Int16Array(N), cnt = new Float64Array(G);
+    var gx0 = new Int32Array(G).fill(W), gx1 = new Int32Array(G).fill(-1);
+    for (i = 0; i < N; i++) {
+      if (lab[i] < 0) { rids[i] = -1; continue; }
+      var g = grp[lab[i]]; rids[i] = g; cnt[g]++; var xx = i % W; if (xx < gx0[g]) gx0[g] = xx; if (xx > gx1[g]) gx1[g] = xx;
+    }
+    var wsum = 0, wts = [];
+    for (var g2 = 0; g2 < G; g2++) { var wv = (g2 === lumpIdx && hasLump) ? 0.6 + 3 * Math.sqrt(cnt[g2] / Math.max(1, opaque)) : 0.15 + Math.sqrt(cnt[g2] / Math.max(1, opaque)); wts.push(wv); wsum += wv; }
+    var D = Math.min(4.2, 2.0 + 0.09 * G + (hasLump ? 1.2 * Math.sqrt(cnt[lumpIdx] / Math.max(1, opaque)) : 0)), acc = 0, rg = [];
+    for (g2 = 0; g2 < G; g2++) {
+      var isLump = hasLump && g2 === lumpIdx, t0 = acc / wsum; acc += wts[g2]; var t1 = acc / wsum;
+      var colMin = new Int16Array(W).fill(H), colMax = new Int16Array(W).fill(-1);
+      var col = isLump ? [255, 255, 255] : pal[regs[majors[g2]].pal];
+      rg.push({ t0: t0, t1: t1, dir: (isLump || g2 % 2 === 0) ? 1 : -1, x0: gx0[g2], x1: gx1[g2], colMin: colMin, colMax: colMax, color: col,
+        passes: Math.max(2, Math.min(9, Math.round((t1 - t0) * D / 0.22))) });
+    }
+    var T = new Float32Array(N);
+    for (i = 0; i < N; i++) {
+      var r = rids[i]; if (r < 0) continue;
+      var Rg = rg[r], x = i % W, y = (i / W) | 0, span = Rg.x1 - Rg.x0 + 1;
+      var f = Rg.dir > 0 ? (x - Rg.x0) / span : (Rg.x1 - x) / span;
+      T[i] = Rg.t0 + (Rg.t1 - Rg.t0) * f;
+      if (y < Rg.colMin[x]) Rg.colMin[x] = y; if (y > Rg.colMax[x]) Rg.colMax[x] = y;
+    }
+    rg.forEach(function (Rg) {
+      var last = -1, x;
+      for (x = 0; x < W; x++) { if (Rg.colMax[x] >= 0) last = x; else if (last >= 0) { Rg.colMin[x] = Rg.colMin[last]; Rg.colMax[x] = Rg.colMax[last]; } }
+      last = -1;
+      for (x = W - 1; x >= 0; x--) { if (Rg.colMax[x] >= 0 && Rg.colMin[x] < H) last = x; else if (last >= 0) { Rg.colMin[x] = Rg.colMin[last]; Rg.colMax[x] = Rg.colMax[last]; } }
+    });
+    var counts = new Uint32Array(2049), total = 0;
+    for (i = 0; i < N; i++) if (rids[i] >= 0) { var qv = Math.min(2047, Math.floor(T[i] * 2047)); counts[qv + 1]++; total++; }
+    for (i = 1; i < 2049; i++) counts[i] += counts[i - 1];
+    var ord = new Uint32Array(total), ordQ = new Uint16Array(total);
+    for (i = 0; i < N; i++) if (rids[i] >= 0) { var q2 = Math.min(2047, Math.floor(T[i] * 2047)), pos = counts[q2]++; ord[pos] = i; ordQ[pos] = q2; }
+    return { W: W, H: H, F: d, ord: ord, ordQ: ordQ, regs: rg, D: D };
+  }
+
+  function penAt(fl, t) {
+    var rg = fl.regs, r = rg[rg.length - 1];
+    for (var i = 0; i < rg.length; i++) if (t <= rg[i].t1) { r = rg[i]; break; }
+    var u = Math.max(0, Math.min(1, (t - r.t0) / Math.max(1e-6, r.t1 - r.t0)));
+    var span = r.x1 - r.x0 + 1, xe = r.dir > 0 ? r.x0 + u * span : r.x1 + 1 - u * span;
+    var xc = Math.max(r.x0, Math.min(r.x1, Math.floor(xe)));
+    var ph = u * r.passes, fr = ph - Math.floor(ph), tri = Math.abs(fr * 2 - 1);
+    var y = r.colMin[xc] + (r.colMax[xc] + 1 - r.colMin[xc]) * tri;
+    return { x: xe / fl.W, y: y / fl.H, color: r.color };
+  }
+  function pitchOf(yn) { return 180 * Math.pow(1400 / 180, 1 - Math.max(0, Math.min(1, yn))); }
+
+  /* ---------- Som ---------- */
+  var audio = { ctx: null, osc: null, gain: null, on: false };
+  function initAudio() {
+    if (audio.ctx) { if (audio.ctx.state === 'suspended') audio.ctx.resume(); return; }
+    var AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
+    var ctx = new AC(), g = ctx.createGain(), o = ctx.createOscillator(), lp = ctx.createBiquadFilter();
+    o.type = 'sine'; o.frequency.value = 440; g.gain.value = 0; lp.type = 'lowpass'; lp.frequency.value = 4000;
+    o.connect(g); g.connect(lp); lp.connect(ctx.destination); o.start();
+    audio.ctx = ctx; audio.osc = o; audio.gain = g;
+    if (ctx.state === 'suspended') ctx.resume();
+  }
+  function tone(freq) {
+    if (!audio.on || !audio.ctx) return;
+    var t = audio.ctx.currentTime;
+    if (freq) { audio.osc.frequency.setTargetAtTime(freq, t, 0.01); audio.gain.gain.setTargetAtTime(0.15, t, 0.015); }
+    else audio.gain.gain.setTargetAtTime(0, t, 0.03);
+  }
+  function setSound(on) {
+    audio.on = on; if (on) initAudio(); else tone(0);
+    $('bSound').setAttribute('aria-pressed', String(on));
+    $('bSound').textContent = on ? 'Som' : 'Mudo';
+  }
+
+  /* ---------- Hover e animações ---------- */
+  var anims = [], hover = -1, hoverToken = 0, hudAnim = null, raf = 0, FADE = 420;
+
+  function makeAnim(c, fl) {
+    c.groups.forEach(function (g) { fitGroup(g, fl.W / fl.H); });
+    var vis = new Uint8ClampedArray(fl.F);
+    for (var k = 0; k < fl.ord.length; k++) vis[fl.ord[k] * 4 + 3] = 0;
+    var rc = document.createElement('canvas'); rc.width = fl.W; rc.height = fl.H;
+    var rx = rc.getContext('2d'); var img = new ImageData(vis, fl.W, fl.H); rx.putImageData(img, 0, 0);
+    return { country: c, fl: fl, rc: rc, rx: rx, img: img, ptr: 0, start: performance.now(), t: 0, done: false, live: true, state: 'draw', alpha: 1, trace: [], f: 0 };
+  }
+  function advance(a, t) {
+    var fl = a.fl, lim = t * 2047, ch = false, d = a.img.data;
+    while (a.ptr < fl.ordQ.length && fl.ordQ[a.ptr] <= lim) { var p = fl.ord[a.ptr] * 4; d[p + 3] = fl.F[p + 3]; a.ptr++; ch = true; }
+    if (ch) a.rx.putImageData(a.img, 0, 0);
+  }
+
+  function setHud(c, flagOk) {
+    $('hName').textContent = c ? c.label : 'Escolha um país';
+    $('hCode').textContent = c ? c.code : '—';
+    $('hState').textContent = c && !flagOk ? 'sem bandeira' : '';
+    $('hud').classList.toggle('idle', !c);
+  }
+
+  async function startFlag(i) {
+    var c = countries[i], token = ++hoverToken;
+    setHud(c, true);
+    var fl = await getFlag(c.code);
+    if (token !== hoverToken) return;
+    if (!fl) { setHud(c, false); hudAnim = null; requestTick(); return; }
+    var a = makeAnim(c, fl);
+    anims.push(a); hudAnim = a;
+    requestTick();
+  }
+
+  function setHover(i) {
+    if (i === hover) return;
+    hover = i;
+    var now = performance.now();
+    anims.forEach(function (a) { if (a.live) { a.live = false; a.state = 'fade'; a.fadeStart = now; } });
+    tone(0);
+    if (i < 0) { hoverToken++; tip.style.opacity = 0; requestTick(); return; }
+    startFlag(i);
+    requestTick();
+  }
+
+  function requestTick() { if (!raf) raf = requestAnimationFrame(tick); }
+
+  function tick(now) {
+    raf = 0;
+    var busy = false;
+    if (viewDirty) { drawBase(); viewDirty = false; hitDirty = true; overDirty = true; }
+    var live = null;
+    anims.forEach(function (a) {
+      if (a.state === 'draw') {
+        a.t = Math.min(1, (now - a.start) / (a.fl.D * 1000)); advance(a, a.t);
+        if (a.t >= 1) { a.done = true; a.state = 'done'; }
+        if (a.live) {
+          live = a;
+          if (a.state === 'draw') {
+            var pen = penAt(a.fl, a.t); a.f = pitchOf(pen.y); a.pen = pen;
+            a.trace.push([a.t, a.f, pen.color]); tone(a.f);
+          } else { a.pen = null; tone(0); }
+        }
+        if (a.state === 'draw') busy = true;
+        overDirty = true;
+      } else if (a.state === 'fade') {
+        a.alpha = 1 - (now - a.fadeStart) / FADE; busy = true; overDirty = true;
+      }
+    });
+    anims = anims.filter(function (a) { return !(a.state === 'fade' && a.alpha <= 0); });
+    if (overDirty) { drawOver(); overDirty = false; }
+    drawHud(live || (hudAnim && anims.indexOf(hudAnim) >= 0 ? hudAnim : hudAnim));
+    if (busy) requestTick();
+  }
+
+  /* ---------- Desenho ---------- */
+  function setT(ctx) { ctx.setTransform(dpr * view.k, 0, 0, dpr * view.k, dpr * view.tx, dpr * view.ty); }
+
+  function drawBase() {
+    bctx.setTransform(1, 0, 0, 1, 0, 0); bctx.fillStyle = '#000'; bctx.fillRect(0, 0, baseCv.width, baseCv.height);
+    if (!allPath) return;
+    setT(bctx);
+    bctx.lineJoin = 'round'; bctx.lineWidth = Math.max(0.55, 0.8 * Math.min(1, 1 + Math.log2(view.k / fitK) * 0.1)) / view.k;
+    bctx.strokeStyle = 'rgba(255,255,255,0.82)'; bctx.fillStyle = 'rgba(255,255,255,0.02)';
+    bctx.fill(allPath, 'evenodd'); bctx.stroke(allPath);
+  }
+
+  function drawOver() {
+    octx.setTransform(1, 0, 0, 1, 0, 0); octx.clearRect(0, 0, overCv.width, overCv.height);
+    var k = view.k, tx = view.tx, ty = view.ty;
+    octx.imageSmoothingQuality = 'high';
+    anims.forEach(function (a) {
+      var c = a.country; setT(octx);
+      octx.globalAlpha = a.state === 'fade' ? Math.max(0, a.alpha) : 1;
+      var src = a.done ? a.fl.vec : a.rc;
+      c.groups.forEach(function (g) {
+        if (g.x1 * k + tx < 0 || g.x0 * k + tx > VW || g.y1 * k + ty < 0 || g.y0 * k + ty > VH) return;
+        if ((g.x1 - g.x0) * k < 0.6 && (g.y1 - g.y0) * k < 0.6) return;
+        octx.save(); octx.clip(g.path, 'evenodd');
+        octx.drawImage(src, g.fx, g.fy, g.fw, g.fh);
+        if (a.pen && g === c.main) {
+          var px = g.fx + a.pen.x * g.fw, py = g.fy + a.pen.y * g.fh, r = 7 / k;
+          var gr = octx.createRadialGradient(px, py, 0, px, py, r);
+          gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.3, 'rgba(255,255,255,.75)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+          octx.fillStyle = gr; octx.beginPath(); octx.arc(px, py, r, 0, 6.2832); octx.fill();
+        }
+        octx.restore();
+      });
+      octx.lineJoin = 'round'; octx.lineWidth = 1.3 / k; octx.strokeStyle = '#fff'; octx.stroke(c.path);
+      octx.globalAlpha = 1;
+    });
+  }
+
+  function sizeCanvas(cv, w, h) { var W = Math.round(w * dpr), H = Math.round(h * dpr); if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; } }
+
+  function drawHud(a) {
+    if (a) { var asp = a.fl.W + ' / ' + a.fl.H; if (flagCv.dataset.asp !== asp) { flagCv.dataset.asp = asp; flagCv.style.aspectRatio = asp; } }
+    var cw = flagCv.clientWidth, ch = flagCv.clientHeight; if (!cw || !ch) return;
+    sizeCanvas(flagCv, cw, ch);
+    fctx.setTransform(dpr, 0, 0, dpr, 0, 0); fctx.clearRect(0, 0, cw, ch);
+    var tw = traceCv.clientWidth, th = traceCv.clientHeight;
+    sizeCanvas(traceCv, tw, th);
+    tctx.setTransform(dpr, 0, 0, dpr, 0, 0); tctx.clearRect(0, 0, tw, th);
+    tctx.strokeStyle = 'rgba(255,255,255,.12)'; tctx.lineWidth = 1;
+    tctx.beginPath(); tctx.moveTo(0, th - 0.5); tctx.lineTo(tw, th - 0.5); tctx.moveTo(0, 0.5); tctx.lineTo(tw, 0.5); tctx.stroke();
+    if (!a) return;
+    fctx.imageSmoothingQuality = 'high';
+    fctx.drawImage(a.done ? a.fl.vec : a.rc, 0, 0, cw, ch);
+    if (a.pen && a.live) {
+      var px = a.pen.x * cw, py = a.pen.y * ch, gr = fctx.createRadialGradient(px, py, 0, px, py, 8);
+      gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.35, 'rgba(255,255,255,.7)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+      fctx.fillStyle = gr; fctx.beginPath(); fctx.arc(px, py, 8, 0, 6.2832); fctx.fill();
+    }
+    var tr = a.trace, ly = Math.log(1400 / 180);
+    tctx.lineWidth = 1.4; tctx.lineJoin = 'round';
+    for (var i = 1; i < tr.length; i++) {
+      var c = tr[i][2], lum = 0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2];
+      tctx.strokeStyle = lum < 70 ? 'rgb(' + Math.min(255, c[0] + 90) + ',' + Math.min(255, c[1] + 90) + ',' + Math.min(255, c[2] + 90) + ')' : 'rgb(' + (c[0] | 0) + ',' + (c[1] | 0) + ',' + (c[2] | 0) + ')';
+      tctx.beginPath();
+      tctx.moveTo(tr[i - 1][0] * (tw - 2) + 1, th - 2 - (Math.log(tr[i - 1][1] / 180) / ly) * (th - 4));
+      tctx.lineTo(tr[i][0] * (tw - 2) + 1, th - 2 - (Math.log(tr[i][1] / 180) / ly) * (th - 4));
+      tctx.stroke();
+    }
+    $('hHz').textContent = a.state === 'draw' && a.live ? Math.round(a.f) + ' Hz' : (a.done ? 'completa' : '180–1400 Hz');
+  }
+
+  /* ---------- Vista, zoom e hit-test ---------- */
+  function reserveBottom() { return VW <= 640 ? ($('hud').offsetHeight + 24) : 14; }
+  function fitView() {
+    var padT = 54, padS = 16, padB = reserveBottom();
+    var aw = VW - 2 * padS, ah = VH - padT - padB;
+    fitK = Math.min(aw / worldW, ah / worldH);
+    view.k = fitK; view.tx = padS + (aw - worldW * fitK) / 2; view.ty = padT + (ah - worldH * fitK) / 2;
+    viewDirty = true; requestTick();
+  }
+  function clampView() {
+    view.k = Math.max(fitK, Math.min(fitK * 70, view.k));
+    var w = worldW * view.k, h = worldH * view.k;
+    view.tx = Math.min(VW * 0.8, Math.max(VW * 0.2 - w, view.tx));
+    view.ty = Math.min(VH * 0.8, Math.max(VH * 0.2 - h, view.ty));
+  }
+  function zoomAt(mx, my, f) {
+    var nk = Math.max(fitK, Math.min(fitK * 70, view.k * f)), r = nk / view.k;
+    view.tx = mx - (mx - view.tx) * r; view.ty = my - (my - view.ty) * r; view.k = nk;
+    clampView(); viewDirty = true; requestTick();
+  }
+
+  function drawHit() {
+    hitCtx.setTransform(1, 0, 0, 1, 0, 0); hitCtx.clearRect(0, 0, hitCv.width, hitCv.height);
+    hitCtx.setTransform(view.k, 0, 0, view.k, view.tx, view.ty);
+    hitCtx.lineJoin = 'round'; hitCtx.lineWidth = 2.5 / view.k;
+    for (var i = 0; i < countries.length; i++) {
+      var id = i + 1, col = 'rgb(' + ((id >> 16) & 255) + ',' + ((id >> 8) & 255) + ',' + (id & 255) + ')';
+      hitCtx.fillStyle = col; hitCtx.strokeStyle = col;
+      hitCtx.fill(countries[i].path, 'evenodd'); hitCtx.stroke(countries[i].path);
+    }
+    hitDirty = false;
+  }
+  function pick(x, y) {
+    if (hitDirty) drawHit();
+    var xi = Math.floor(x), yi = Math.floor(y);
+    if (xi < 1 || yi < 1 || xi >= VW - 1 || yi >= VH - 1) return -1;
+    var votes = {}, best = -1, bc = 0, pts = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]];
+    pts.forEach(function (p) {
+      var d = hitCtx.getImageData(xi + p[0], yi + p[1], 1, 1).data, id = (d[0] << 16) | (d[1] << 8) | d[2];
+      if (d[3] === 255 && id >= 1 && id <= countries.length) { votes[id] = (votes[id] || 0) + (p[0] === 0 && p[1] === 0 ? 1.5 : 1); if (votes[id] > bc) { bc = votes[id]; best = id - 1; } }
+    });
+    return best;
+  }
+
+  function showTip(x, y, i) {
+    if (i < 0) { tip.style.opacity = 0; return; }
+    tip.textContent = countries[i].label;
+    var w = tip.offsetWidth, px = Math.min(VW - w - 8, x + 14), py = y + 18 > VH - 30 ? y - 32 : y + 18;
+    tip.style.transform = 'translate(' + Math.max(8, px) + 'px,' + py + 'px)'; tip.style.opacity = 1;
+  }
+
+  /* ---------- Ponteiro ---------- */
+  var ptrs = new Map(), drag = null, pinch = null;
+  overCv.addEventListener('pointerdown', function (e) {
+    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (ptrs.size === 2) {
+      var p = Array.from(ptrs.values());
+      pinch = { d: Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y), cx: (p[0].x + p[1].x) / 2, cy: (p[0].y + p[1].y) / 2 }; drag = null;
+    } else { drag = { id: e.pointerId, sx: e.clientX, sy: e.clientY, tx: view.tx, ty: view.ty, moved: false }; }
+  });
+  overCv.addEventListener('pointermove', function (e) {
+    var prev = ptrs.get(e.pointerId); if (prev) { prev.x = e.clientX; prev.y = e.clientY; }
+    if (pinch && ptrs.size === 2) {
+      var p = Array.from(ptrs.values()), d = Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y), cx = (p[0].x + p[1].x) / 2, cy = (p[0].y + p[1].y) / 2;
+      view.tx += cx - pinch.cx; view.ty += cy - pinch.cy; zoomAt(cx, cy, d / pinch.d); pinch.d = d; pinch.cx = cx; pinch.cy = cy; return;
+    }
+    if (drag && drag.id === e.pointerId) {
+      var dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
+      if (!drag.moved && Math.hypot(dx, dy) > 5) { drag.moved = true; try { overCv.setPointerCapture(e.pointerId); } catch (er) {} }
+      if (drag.moved) { view.tx = drag.tx + dx; view.ty = drag.ty + dy; clampView(); viewDirty = true; requestTick(); showTip(0, 0, -1); return; }
+    }
+    if (e.pointerType === 'mouse' && countries.length) { var i = pick(e.clientX, e.clientY); showTip(e.clientX, e.clientY, i); setHover(i); }
+  });
+  function endPtr(e) {
+    var d = drag; ptrs.delete(e.pointerId);
+    if (ptrs.size < 2) pinch = null;
+    if (d && d.id === e.pointerId) {
+      drag = null;
+      if (!d.moved && e.pointerType !== 'mouse' && countries.length) { var i = pick(e.clientX, e.clientY); showTip(e.clientX, e.clientY, i); setHover(i === hover ? -1 : i); }
+    }
+  }
+  overCv.addEventListener('pointerup', endPtr);
+  overCv.addEventListener('pointercancel', endPtr);
+  overCv.addEventListener('pointerleave', function (e) { if (e.pointerType === 'mouse' && !drag) { setHover(-1); showTip(0, 0, -1); } });
+  overCv.addEventListener('wheel', function (e) { e.preventDefault(); zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.0016)); if (e.clientX) { var i = pick(e.clientX, e.clientY); showTip(e.clientX, e.clientY, i); setHover(i); } }, { passive: false });
+
+  $('bIn').onclick = function () { zoomAt(VW / 2, VH / 2, 1.6); };
+  $('bOut').onclick = function () { zoomAt(VW / 2, VH / 2, 1 / 1.6); };
+  $('bReset').onclick = function () { fitView(); };
+  $('bSound').onclick = function () { setSound(!audio.on); };
+  document.addEventListener('visibilitychange', function () { if (document.hidden) tone(0); });
+
+  /* ---------- Tamanho ---------- */
+  function resize() {
+    VW = $('app').clientWidth; VH = $('app').clientHeight;
+    sizeCanvas(baseCv, VW, VH); sizeCanvas(overCv, VW, VH);
+    hitCv.width = VW; hitCv.height = VH;
+    if (countries.length) fitView(); else { viewDirty = true; requestTick(); }
+  }
+  window.addEventListener('resize', resize);
+
+  /* ---------- Início ---------- */
+  function enter(withSound) {
+    $('gate').hidden = true;
+    setSound(withSound);
+  }
+  $('gSound').onclick = function () { enter(true); };
+  $('gMute').onclick = function () { enter(false); };
+
+  resize();
+  loadMapData().then(function (raw) {
+    buildWorld(raw);
+    fitView();
+    statusEl.textContent = countries.length + ' países e territórios prontos.';
+    $('gSound').disabled = false; $('gMute').disabled = false;
+    loadFlagIndex(); prefetchDetail();
+    window.__ready = true;
+  }).catch(function (e) {
+    console.error(e);
+    statusEl.className = 'err';
+    statusEl.textContent = 'Não foi possível carregar os dados do mapa. Verifique a conexão e recarregue a página.';
+  });
+
+  window.__dbg = { get countries() { return countries; }, setHover: setHover, view: view, getFlag: getFlag, get anims() { return anims; } };
+})();
+</script>
+
+</body>
+</html>
