@@ -8,12 +8,6 @@ Mapa-múndi em preto com contornos brancos. Ao passar o mouse sobre um país ou 
 - Clique em "Entrar com som" na primeira tela, porque o navegador só libera áudio após um clique.
 - Role para ampliar, arraste para mover. No celular, toque no país e use pinça para o zoom.
 
-## Publicar no GitHub Pages
-
-1. Envie estes arquivos para um repositório público.
-2. Em Settings > Pages, escolha "Deploy from a branch", branch `main`, pasta `/ (root)`.
-3. O site fica em `https://SEU-USUARIO.github.io/NOME-DO-REPOSITORIO/`.
-
 ## Créditos
 
 - Mapa: [Highcharts Map Collection](https://github.com/highcharts/map-collection-dist), com dados do [Natural Earth](https://www.naturalearthdata.com). Respeite a licença e a atribuição do projeto.
